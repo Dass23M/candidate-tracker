@@ -1,4 +1,3 @@
-import { Prisma } from '@prisma/client';
 import { prisma } from '../../plugins/prisma';
 import { applicationStatusValues, type ApplicationStatus } from '@candidate-tracker/shared';
 
@@ -42,18 +41,31 @@ async function getRejectionRate(totalApplications: number) {
   return Math.round((rejected / totalApplications) * 1000) / 1000; // e.g. 0.182
 }
 
-async function getApplicationsPerWeek() {
-  const rows = await prisma.$queryRaw<{ week_start: Date; count: bigint }[]>(
-    Prisma.sql`
-      SELECT date_trunc('week', applied_at)::date AS week_start, COUNT(*)::bigint AS count
-      FROM applications
-      WHERE applied_at >= NOW() - INTERVAL '8 weeks'
-      GROUP BY week_start
-      ORDER BY week_start ASC
-    `
-  );
+function startOfWeek(date: Date): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() - d.getDay());
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
-  return rows.map((r) => ({ weekStart: r.week_start, count: Number(r.count) }));
+async function getApplicationsPerWeek() {
+  const since = new Date();
+  since.setDate(since.getDate() - 56); // 8 weeks
+
+  const applications = await prisma.application.findMany({
+    where: { appliedAt: { gte: since } },
+    select: { appliedAt: true },
+  });
+
+  const weekBuckets = new Map<string, number>();
+  for (const app of applications) {
+    const key = startOfWeek(app.appliedAt).toISOString();
+    weekBuckets.set(key, (weekBuckets.get(key) ?? 0) + 1);
+  }
+
+  return Array.from(weekBuckets.entries())
+    .map(([weekStart, count]) => ({ weekStart: new Date(weekStart), count }))
+    .sort((a, b) => a.weekStart.getTime() - b.weekStart.getTime());
 }
 
 async function getLatestApplications() {
